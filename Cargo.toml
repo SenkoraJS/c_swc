@@ -1,0 +1,14 @@
+[package]
+name = "c_swc"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+swc_common = { version = "0.31.11", features = ["sourcemap", "tty-emitter"] }
+swc_core = { version = "0.76.35", features = ["common"] }
+swc_ecmascript = { version = "0.228.23", features = ["codegen", "parser", "transforms", "typescript", "visit"] }
+
+[lib]
+crate-type = ["staticlib"]
