@@ -27,7 +27,7 @@ jobs:
         run: cargo audit
 
   compile:
-    name: Compile ${{ matrix.target }}
+    name: Compile
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     needs: check
