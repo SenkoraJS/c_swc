@@ -1,3 +1,4 @@
+use swc_common::errors::{ColorConfig, Handler};
 use swc_core::common::comments::{Comments, SingleThreadedComments};
 use swc_core::common::input::StringInput;
 use swc_core::common::sync::Lrc;
@@ -6,32 +7,29 @@ use swc_ecmascript::ast::EsVersion;
 use swc_ecmascript::codegen::text_writer::JsWriter;
 use swc_ecmascript::codegen::{Config as CodegenConfig, Emitter};
 use swc_ecmascript::parser::lexer::Lexer;
-use swc_ecmascript::parser::Parser;
 use swc_ecmascript::parser::Syntax;
+use swc_ecmascript::parser::{Capturing, Parser};
 use swc_ecmascript::transforms::fixer::fixer;
 use swc_ecmascript::transforms::hygiene::hygiene;
 use swc_ecmascript::transforms::resolver;
 use swc_ecmascript::transforms::typescript::strip;
 use swc_ecmascript::visit::FoldWith;
 
-fn main() {
-    let cm: Lrc<SourceMap> = Default::default();
-    let fm = cm.new_source_file(
-        FileName::Custom("test.js".into()),
-        "function foo(test: number) { return test + 5 }".into(),
-    );
+use crate::errors::Error;
 
-    let lexer = Lexer::new(
-        Syntax::Typescript(Default::default()),
-        EsVersion::latest(),
-        StringInput::from(&*fm),
-        None,
-    );
-
-    let mut parser = Parser::new_from(lexer);
+pub fn transpile_module(file_name: String, content: String) -> Result<String, Error> {
+    let source_map: Lrc<SourceMap> = Default::default();
+    let file: Lrc<swc_common::SourceFile> =
+        source_map.new_source_file(FileName::Custom(file_name), content);
+    let input = StringInput::from(&*file);
 
     let comments = SingleThreadedComments::default();
-    let module = parser.parse_module().unwrap();
+    let (handler, mut parser) = initialise_parser(source_map.clone(), &comments, input);
+
+    let module = parser.parse_module().map_err(|e| {
+        e.into_diagnostic(&handler).emit();
+        Error::Parse
+    })?;
 
     let globals = Globals::default();
     let module = GLOBALS.set(&globals, || {
@@ -47,11 +45,35 @@ fn main() {
     let mut buffer = Vec::new();
     let mut mappings = Vec::new();
 
-    let mut emitter = initialise_emitter(cm, &comments, &mut buffer, &mut mappings);
-    emitter.emit_module(&module).unwrap();
+    let mut emitter = initialise_emitter(source_map, &comments, &mut buffer, &mut mappings);
+    emitter.emit_module(&module).map_err(|_| Error::Emission)?;
 
-    println!("Hello, world!");
-    println!("{}", String::from_utf8(buffer).unwrap());
+    match String::from_utf8(buffer) {
+        Ok(code) => Ok(code),
+        Err(_) => Err(Error::UTF8InvalidSlice),
+    }
+}
+
+fn initialise_parser<'a>(
+    source_map: Lrc<SourceMap>,
+    comments: &'a dyn Comments,
+    input: StringInput<'a>,
+) -> (Handler, Parser<Capturing<Lexer<'a>>>) {
+    let handler = Handler::with_tty_emitter(ColorConfig::Auto, true, false, Some(source_map));
+    let lexer = Lexer::new(
+        Syntax::Typescript(Default::default()),
+        EsVersion::Es2022,
+        input,
+        Some(comments),
+    );
+    let capturing = Capturing::new(lexer);
+    let mut parser = Parser::new_from(capturing);
+
+    for error in parser.take_errors() {
+        error.into_diagnostic(&handler).emit();
+    }
+
+    (handler, parser)
 }
 
 fn initialise_emitter<'a>(
